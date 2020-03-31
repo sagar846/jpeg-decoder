@@ -9,6 +9,7 @@ namespace kpeg
 {
 
 // Add left child for specified node 
+	
     void insertLeft( NodePtr node, const UInt16 value )
     {
         if ( node == nullptr )
@@ -28,6 +29,7 @@ namespace kpeg
         lNode->code = node->code + "0";				//Since its a left child we add 0 to the existing code
         lNode->value = value;
     }
+	
 // Add right child for specified node    
 
     void insertRight( NodePtr node, const UInt16 value )
@@ -118,8 +120,9 @@ namespace kpeg
     {
         logFile << "Constructing Huffman tree with specified Huffman table..." << std::endl;
         
-        m_root = createRootNode( 0x0000 );							// Root node of the Huffman tree
-        insertLeft( m_root, 0x0000 );
+        
+	m_root = createRootNode( 0x0000 );							// Create root node of the Huffman tree
+        insertLeft( m_root, 0x0000 );								// Creating internal root nodes 
         insertRight( m_root, 0x0000 );
         inOrder( m_root );
         NodePtr leftMost = m_root->lChild;
@@ -167,12 +170,12 @@ namespace kpeg
         logFile << "Finished building Huffman tree [OK]" << std::endl;
     }
     
-    const NodePtr HuffmanTree::getTree() const						// get root node of huffman tree
+    const NodePtr HuffmanTree::getTree() const					// get root node of huffman tree
     {
         return m_root;
     }
     
-    const std::string HuffmanTree::contains( const std::string& huffCode ) 		// contains() - checks whether given huffman code is present in tree 
+    const std::string HuffmanTree::contains( const std::string& huffCode ) 	// contains() - checks whether given huffman code is present in tree 
     {
         if ( utils::isStringWhiteSpace( huffCode ) )
         {
@@ -185,10 +188,10 @@ namespace kpeg
         
         do
         {
-            if ( huffCode[i] == '0' )
+            if ( huffCode[i] == '0' )						// Check for 0 then move to left child			
                 nptr = nptr->lChild;
             else
-                nptr = nptr->rChild;
+                nptr = nptr->rChild;						// else move to right child
             
             if ( nptr != nullptr && nptr->leaf && nptr->code == huffCode )
             {
