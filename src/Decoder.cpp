@@ -145,6 +145,9 @@ Decoder::ResultCode Decoder::parseSOF0Segment()
                 for (auto&& symbol : m_huffmanTable[HTType][HTNumber][i].second)
                 {
                     std::stringstream ss;
+                    //setfill()-Sets charecter specified 
+                    //setw() - sets the number of charecter to be used
+                    //setprecision() - set a decimal precision
                     ss << "0x" << std::hex << std::setfill('0') << std::setw(2) << std::setprecision(16) << (int)symbol;
                     codeStr += ss.str() + " ";
                     totalCodes++;
