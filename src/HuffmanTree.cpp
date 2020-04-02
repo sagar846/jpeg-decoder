@@ -5,7 +5,7 @@
 #include "HuffmanTree.hpp"
 #include "Utility.hpp"
 
-namespace kpeg
+namespace temp_peg
 {
 
 // Add left child for specified node 

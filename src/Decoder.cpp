@@ -1,95 +1,221 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#include <arpa/inet.h> // htons
+#include <iomanip>
+#include <sstream>
+
+#include "Decoder.hpp"
+#include "Markers.hpp"
+#include "Utility.hpp"
+
+namespace temp_peg
+{
+
+Decoder::Decoder()
+{
+    logFile << "Created \'Decoder object\'." << std::endl;
+}
+        
+Decoder::Decoder(const std::string& filename)
+{
+    logFile << "Created \'Decoder object\'." << std::endl;
+}
+
+Decoder::~Decoder()
+{
+    close();
+    logFile << "Destroyed \'Decoder object\'." << std::endl;
+}
+
+bool Decoder::open(const std::string& filename)
+{
+    m_imageFile.open(filename, std::ios::in | std::ios::binary);
+    
+    if (!m_imageFile.is_open() || !m_imageFile.good())
+    {
+        logFile << "Unable to open image: \'" + filename + "\'" << std::endl;
+        return false;
+    }
+    
+    logFile << "Opened JPEG image: \'" + filename + "\'" << std::endl;
+    
+    m_filename = filename;
+    
+    return true;
+}
+
+Decoder::ResultCode Decoder::decodeImageFile()
+{
+    if (!m_imageFile.is_open() || !m_imageFile.good())
+    {
+        logFile << "Unable scan image file: \'" + m_filename + "\'" << std::endl;
+        return ResultCode::ERROR;
+    }
+    
+    logFile << "Started decoding process..." << std::endl;
+    
+    UInt8 byte;
+    ResultCode status = ResultCode::DECODE_DONE;
+    
+    while (m_imageFile >> std::noskipws >> byte)
+    {
+        if (byte == JFIF_BYTE_FF)
+        {
+            m_imageFile >> std::noskipws >> byte;
+            
+            ResultCode code = parseSegmentInfo(byte);
+            
+            if (code == ResultCode::SUCCESS)
+                continue;
+            else if (code == ResultCode::TERMINATE)
+            {
+                status = ResultCode::TERMINATE;
+                break;
+            }
+            else if (code == ResultCode::DECODE_INCOMPLETE)
+            {
+                status = ResultCode::DECODE_INCOMPLETE;
+                break;
+            }
+        }
+        else
+        {
+            logFile << "[ FATAL ] Invalid JFIF file! Terminating..." << std::endl;
+            status = ResultCode::ERROR;
+            break;
+        }
+    }
+    
+    if (status == ResultCode::DECODE_DONE)
+    {
+        decodeScanData();
+        m_image.createImageFromMCUs(m_MCU);
+        logFile << "Finished decoding process [OK]." << std::endl;
+    }
+    else if (status == ResultCode::TERMINATE)
+    {
+        logFile << "Terminated decoding process [NOT-OK]." << std::endl;
+    }
+    
+    else if (status == ResultCode::DECODE_INCOMPLETE)
+    {
+        logFile << "Decoding process incomplete [NOT-OK]." << std::endl;
+    }
+    
+    return status;
+}
+
+bool Decoder::dumpRawData()
+{
+    std::size_t extPos = m_filename.find(".jpg");
+    
+    if (extPos == std::string::npos)
+        extPos = m_filename.find(".jpeg");
+    
+    std::string targetFilename = m_filename.substr(0, extPos) + ".ppm";
+    m_image.dumpRawData(targetFilename);
+    
+    return true;
+}
+
+void Decoder::close()
+{
+    m_imageFile.close();
+    logFile << "Closed image file: \'" + m_filename + "\'" << std::endl;
+}
+
+}
+
+void Decoder :: parseSOSSegment() {
+        if (!m_imageFile.is_open() || !m_imageFile.good()) { // check if file is open and has proper integrity
+            logFile << "Unable scan image file: \'" + m_filename + "\'" << std :: endl;
+            return;
+        }
+        
+        logFile << "Parsing SOS segment..." << std :: endl;
+        
+        UInt16 len;
+        
+        m_imageFile.read(reinterpret_cast<char *>(&len), 2);
+        len = htons(len); // swaps the endianness of shorts (host-to-network short)
+        
+        logFile << "SOS segment length: " << len << std :: endl;
+        
+        UInt8 compCount; // Number of components
+        UInt16 compInfo; // Component ID and Huffman table used
+        
+        m_imageFile >> std :: noskipws >> compCount; // load the value, do not skip white spaces
+        
+        if (compCount < 1 || compCount > 4) {
+            logFile << "Invalid component count in image scan: " << (int)compCount << ", terminating decoding process..." << std :: endl;
+            return;
+        }
+        
+        logFile << "Number of components in scan data: " << (int)compCount << std :: endl;
+        
+        for (auto i = 0; i < compCount; ++i) {
+            m_imageFile.read(reinterpret_cast<char *>(&compInfo), 2);
+            compInfo = htons(compInfo); // swaps the endianness of shorts
+            
+            UInt8 cID = compInfo >> 8; // 1st byte denotes component ID 
+            
+            // 2nd byte denotes the Huffman table used:
+            // Bits 7 to 4: DC Table #(0 to 3)
+            // Bits 3 to 0: AC Table #(0 to 3)
+            UInt8 DCTableNum = (compInfo & 0x00f0) >> 4;
+            UInt8 ACTableNum = (compInfo & 0x000f);
+            
+            logFile << "Component ID: " << (int)cID << ", DC Table #: " << (int)DCTableNum << ", AC Table #: " << (int)ACTableNum << std :: endl;
+        }
+        
+        // Skip the next three bytes
+        for (auto i = 0; i < 3; ++i) {
+            UInt8 byte;
+            m_imageFile >> std :: noskipws >> byte;
+        }
+        
+        logFile << "Finished parsing SOS segment [OK]" << std :: endl;
+        
+        scanImageData();
+    }
+    
+void Decoder :: scanImageData() {
+        if (!m_imageFile.is_open() || !m_imageFile.good()) {
+            logFile << "Unable scan image file: \'" + m_filename + "\'" << std :: endl;
+            return;
+        }
+        
+        logFile << "Scanning image data..." << std :: endl;
+        
+        UInt8 byte;
+        
+        while (m_imageFile >> std :: noskipws >> byte) { // do not skip white spaces
+            if (byte == JFIF_BYTE_FF) { // all the markers start with JFIF_BYTE_FF  as the MSB, defined in markers.hpp
+                UInt8 prevByte = byte;
+                
+                m_imageFile >> std :: noskipws >> byte;
+                
+                if (byte == JFIF_EOI) {
+                    logFile << "Found segment, End of Image (FFD9)" << std :: endl;
+                    return;
+                }
+                
+                std :: bitset<8> bits1(prevByte);
+                logFile << "0x" << std :: hex << std :: setfill('0') << std :: setw(2)
+                                            << std :: setprecision(8) << (int)prevByte
+                                            << ", Bits: " << bits1 << std :: endl;
+                                          
+                m_scanData.append(bits1.to_string());
+            }
+            
+            std :: bitset<8> bits(byte);
+            logFile << "0x" << std :: hex << std :: setfill('0') << std :: setw(2)
+                                        << std :: setprecision(8) << (int)byte
+                                        << ", Bits: " << bits << std :: endl;
+            
+            m_scanData.append(bits.to_string());
+        }
+        
+        logFile << "Finished scanning image data [OK]" << std :: endl;
+}
 
 // Parse the start of file segment
 
@@ -160,21 +286,21 @@ Decoder::ResultCode Decoder::parseSOF0Segment()
     
 //Parse the Huffman tables defined in the DHT segment.
 
-    void Decoder::parseDHTSegment()
-    {   
+void Decoder::parseDHTSegment()
+{   
                                                                      //Check whether image file is open or state of file is good.
         
-        if (!m_imageFile.is_open() || !m_imageFile.good())                          
-        {
-            logFile << "Unable scan image file: \'" + m_filename + "\'" << std::endl;
-            return;
-        }
+    if (!m_imageFile.is_open() || !m_imageFile.good())                          
+    {
+        logFile << "Unable scan image file: \'" + m_filename + "\'" << std::endl;
+        return;
+    }
         
-        logFile << "Parsing Huffman table segment..." << std::endl;
+    logFile << "Parsing Huffman table segment..." << std::endl;
         
-        UInt16 len;
-        m_imageFile.read(reinterpret_cast<char *>(&len), 2);
-        len = htons(len);
+    UInt16 len;
+    m_imageFile.read(reinterpret_cast<char *>(&len), 2);
+    len = htons(len);
         
         logFile << "Huffman table length: " << (int)len << std::endl;           //Prints huffman table length
         
@@ -261,3 +387,5 @@ Decoder::ResultCode Decoder::parseSOF0Segment()
         
         logFile << "Finished parsing Huffman table segment [OK]" << std::endl;
     }
+
+
