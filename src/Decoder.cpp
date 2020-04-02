@@ -122,7 +122,6 @@ void Decoder::close()
     logFile << "Closed image file: \'" + m_filename + "\'" << std::endl;
 }
 
-}
 
 void Decoder :: parseSOSSegment() {
         if (!m_imageFile.is_open() || !m_imageFile.good()) { // check if file is open and has proper integrity
@@ -288,7 +287,7 @@ Decoder::ResultCode Decoder::parseSOF0Segment()
 
 void Decoder::parseDHTSegment()
 {   
-                                                                     //Check whether image file is open or state of file is good.
+    //Check whether image file is open or state of file is good.
         
     if (!m_imageFile.is_open() || !m_imageFile.good())                          
     {
@@ -389,3 +388,222 @@ void Decoder::parseDHTSegment()
     }
 
 
+/*
+In the jpeg decoders, the byte "ff" has special meaning
+so something like ff d8 would be the SOI segment 
+but when this same marker byte occurs anywhere else in the file
+it cann get misinterpreted, so to avoid that misinterpretation,
+we insert the empty byte "00".
+This method does that.
+*/
+void Decoder::byteStuffScanData()
+{
+    if (m_scanData.empty())
+    {
+        logFile << " [ FATAL ] Invalid image scan data" << std::endl;
+        return;
+    }
+    
+    logFile << "Byte stuffing image scan data..." << std::endl;
+    
+    for (unsigned i = 0; i <= m_scanData.size() - 8; i += 8)
+    {
+        std::string byte = m_scanData.substr(i, 8);
+        
+        if (byte == "11111111")
+        {
+            if (i + 8 < m_scanData.size() - 8)
+            {
+                std::string nextByte = m_scanData.substr(i + 8, 8);
+                
+                if (nextByte == "00000000")
+                {
+                    m_scanData.erase(i + 8, 8);
+                }
+                else continue;
+            }
+            else
+                continue;
+        }
+    }
+    
+    logFile << "Finished byte stuffing image scan data [OK]" << std::endl;
+}
+
+
+void Decoder::decodeScanData()
+{
+    if (m_scanData.empty())
+    {
+        logFile << " [ FATAL ] Invalid image scan data" << std::endl;
+        return;
+    }
+    
+    byteStuffScanData();
+    
+    logFile << "Decoding image scan data..." << std::endl;
+    
+    const char* component[] = { "Y (Luminance)", "Cb (Chrominance)", "Cr (Chrominance)" };
+    const char* type[] = { "DC", "AC" };        
+    
+    // get number of MCUs in the image file
+    int MCUCount = (m_image.width * m_image.height) / 64;
+    
+    m_MCU.clear();
+    logFile << "MCU count: " << MCUCount << std::endl;
+    
+    int k = 0; // The index of the next bit to be scanned
+    
+    /*
+    Decoding the bit stream for each MCU
+    */
+    for (auto i = 0; i < MCUCount; ++i)
+    {
+        logFile << "Decoding MCU-" << i + 1 << "..." << std::endl;
+        
+        // The run-length coding after decoding the Huffman data
+        std::array<std::vector<int>, 3> RLE;            
+        
+        // For each component Y, Cb & Cr, decode 1 DC
+        // coefficient and then decode 63 AC coefficients.
+        //
+        // NOTE:
+        // Since a signnificant portion of a RLE for a
+        // component contains a trail of 0s, AC coefficients
+        // are decoded till, either an EOB (End of block) is
+        // encountered or 63 AC coefficients have been decoded.
+        
+        for (auto compID = 0; compID < 3; ++compID)
+        {
+            std::string bitsScanned = ""; // Initially no bits are scanned
+            
+            // Firstly, decode the DC coefficient
+            logFile << "Decoding MCU-" << i + 1 << ": " << component[compID] << "/" << type[HT_DC] << std::endl;
+            
+            int HuffTableID = compID == 0 ? 0 : 1;
+            
+            while (1)
+            {       
+                bitsScanned += m_scanData[k];
+                auto value = m_huffmanTree[HT_DC][HuffTableID].contains(bitsScanned);
+                
+                if (!utils::isStringWhiteSpace(value))
+                {
+                    if (value != "EOB")
+                    {   
+                        int zeroCount = UInt8(std::stoi(value)) >> 4 ;
+                        int category = UInt8(std::stoi(value)) & 0x0F;
+                        int DCCoeff = bitStringtoValue(m_scanData.substr(k + 1, category));
+                        
+                        k += category + 1;
+                        bitsScanned = "";
+                        
+                        RLE[compID].push_back(zeroCount);
+                        RLE[compID].push_back(DCCoeff);
+                        
+                        break;
+                    }
+                    
+                    else
+                    {
+                        bitsScanned = "";
+                        k++;
+                        
+                        RLE[compID].push_back(0);
+                        RLE[compID].push_back(0);
+                        
+                        break;
+                    }
+                }
+                else
+                    k++;
+            }
+            
+            // Then decode the AC coefficients
+            logFile << "Decoding MCU-" << i + 1 << ": " << component[compID] << "/" << type[HT_AC] << std::endl;
+            bitsScanned = "";
+            int ACCodesCount = 0;
+                            
+            while (1)
+            {   
+                // If 63 AC codes have been encountered, this block is done, move onto next block                    
+                if (ACCodesCount  == 63)
+                {
+                    break;
+                }
+                
+                // Append the k-th bit to the bits scanned so far
+                bitsScanned += m_scanData[k];
+                auto value = m_huffmanTree[HT_AC][HuffTableID].contains(bitsScanned);
+                
+                if (!utils::isStringWhiteSpace(value))
+                {
+                    if (value != "EOB")
+                    {
+                        int zeroCount = UInt8(std::stoi(value)) >> 4 ;
+                        int category = UInt8(std::stoi(value)) & 0x0F;
+                        int ACCoeff = bitStringtoValue(m_scanData.substr(k + 1, category));
+                        
+                        k += category + 1;
+                        bitsScanned = "";
+                        
+                        RLE[compID].push_back(zeroCount);
+                        RLE[compID].push_back(ACCoeff);
+                        
+                        ACCodesCount += zeroCount + 1;
+                    }
+                    
+                    else
+                    {
+                        bitsScanned = "";
+                        k++;
+                        
+                        RLE[compID].push_back(0);
+                        RLE[compID].push_back(0);
+                        
+                        break;
+                    }
+                }
+                
+                else
+                    k++;
+            }
+            
+            // If both the DC and AC coefficients are EOB, truncate to (0,0)
+            if (RLE[compID].size() == 2)
+            {
+                bool allZeros = true;
+                
+                for (auto&& rVal : RLE[compID])
+                {
+                    if (rVal != 0)
+                    {
+                        allZeros = false;
+                        break;
+                    }
+                }
+                
+                // Remove the extra (0,0) pair
+                if (allZeros)
+                {
+                    RLE[compID].pop_back();
+                    RLE[compID].pop_back();
+                }
+            }
+        }
+        
+        // Construct the MCU block from the RLE &
+        // quantization tables to a 8x8 matrix
+        m_MCU.push_back(MCU(RLE, m_QTables));
+        
+        logFile << "Finished decoding MCU-" << i + 1 << " [OK]" << std::endl;
+    }
+    
+    // The remaining bits, if any, in the scan data are discarded as
+    // they're added byte align the scan data.
+    
+    logFile << "Finished decoding image scan data [OK]" << std::endl;
+}
+
+
+}
