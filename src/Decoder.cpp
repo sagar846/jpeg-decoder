@@ -430,6 +430,197 @@ void Decoder::byteStuffScanData()
     logFile << "Finished byte stuffing image scan data [OK]" << std::endl;
 }
 
+////////
+//
+
+Decoder::ResultCode Decoder::parseSegmentInfo(const UInt8 byte)
+// Invoked by decodeImageData when it finds a marker. This function checks if it is a valid marker, and if it is, invokes the appropriate method to handle it
+{
+    if (byte == JFIF_BYTE_0 || byte == JFIF_BYTE_FF) //if segment byte is either ff or 0 exit with error. Edge case included because both nytes are special bytes
+        return ERROR;
+    
+    switch(byte) // switches bytes and feeds logfile accordingly. Returns success if supported segment id found, else returns terminate.
+    {
+        case JFIF_SOI  : logFile  << "Found segment, Start of Image (FFD8)" << std::endl; return ResultCode::SUCCESS;
+        case JFIF_APP0 : logFile  << "Found segment, JPEG/JFIF Image Marker segment (APP0)" << std::endl; parseAPP0Segment(); return ResultCode::SUCCESS;
+        case JFIF_COM  : logFile  << "Found segment, Comment(FFFE)" << std::endl; parseCOMSegment(); return ResultCode::SUCCESS;
+        case JFIF_DQT  : logFile  << "Found segment, Define Quantization Table (FFDB)" << std::endl; parseDQTSegment(); return ResultCode::SUCCESS;
+        case JFIF_SOF0 : logFile  << "Found segment, Start of Frame 0: Baseline DCT (FFC0)" << std::endl; return parseSOF0Segment();
+        case JFIF_SOF1 : logFile << "Found segment, Start of Frame 1: Extended Sequential DCT (FFC1), Not supported" << std::endl; return ResultCode::TERMINATE;
+        case JFIF_SOF2 : logFile << "Found segment, Start of Frame 2: Progressive DCT (FFC2), Not supported" << std::endl; return ResultCode::TERMINATE;
+        case JFIF_SOF3 : logFile << "Found segment, Start of Frame 3: Lossless Sequential (FFC3), Not supported" << std::endl; return ResultCode::TERMINATE;
+        case JFIF_SOF5 : logFile << "Found segment, Start of Frame 5: Differential Sequential DCT (FFC5), Not supported" << std::endl; return ResultCode::TERMINATE;
+        case JFIF_SOF6 : logFile << "Found segment, Start of Frame 6: Differential Progressive DCT (FFC6), Not supported" << std::endl; return ResultCode::TERMINATE;
+        case JFIF_SOF7 : logFile << "Found segment, Start of Frame 7: Differential lossless (Sequential) (FFC7), Not supported" << std::endl; return ResultCode::TERMINATE;
+        case JFIF_SOF9 : logFile << "Found segment, Start of Frame 9: Extended Sequential DCT, Arithmetic Coding (FFC9), Not supported" << std::endl; return ResultCode::TERMINATE;
+        case JFIF_SOF10: logFile << "Found segment, Start of Frame 10: Progressive DCT, Arithmetic Coding (FFCA), Not supported" << std::endl; return ResultCode::TERMINATE;
+        case JFIF_SOF11: logFile << "Found segment, Start of Frame 11: Lossless (Sequential), Arithmetic Coding (FFCB), Not supported" << std::endl; return ResultCode::TERMINATE;
+        case JFIF_SOF13: logFile << "Found segment, Start of Frame 13: Differentical Sequential DCT, Arithmetic Coding (FFCD), Not supported" << std::endl; return ResultCode::TERMINATE;
+        case JFIF_SOF14: logFile << "Found segment, Start of Frame 14: Differentical Progressive DCT, Arithmetic Coding (FFCE), Not supported" << std::endl; return ResultCode::TERMINATE;
+        case JFIF_SOF15: logFile << "Found segment, Start of Frame 15: Differentical Lossless (Sequential), Arithmetic Coding (FFCF), Not supported" << std::endl; return ResultCode::TERMINATE;
+        case JFIF_DHT  : logFile  << "Found segment, Define Huffman Table (FFC4)" << std::endl; parseDHTSegment(); return ResultCode::SUCCESS;
+        case JFIF_SOS  : logFile  << "Found segment, Start of Scan (FFDA)" << std::endl; parseSOSSegment(); return ResultCode::SUCCESS;
+    }
+    
+    return ResultCode::SUCCESS;
+}
+
+void Decoder::parseAPP0Segment()
+//This function is called when AAP-0 segment marker is encountered. We also ignore thumbnail data if present.
+{
+    if (!m_imageFile.is_open() || !m_imageFile.good()) // checking if image scanning is not possible
+    {
+        logFile << "Unable scan image file: \'" + m_filename + "\'" << std::endl;
+        return;
+    }
+    
+    logFile << "Parsing JPEG/JFIF marker segment (APP-0)..." << std::endl;
+    
+    UInt16 lenByte = 0;
+    UInt8 byte = 0;
+    
+    m_imageFile.read(reinterpret_cast<char *>(&lenByte), 2);
+    lenByte = htons(lenByte);
+    std::size_t curPos = m_imageFile.tellg();
+    
+    logFile << "JFIF Application marker segment length: " << lenByte << std::endl;
+    
+    // Skip the 'JFIF\0' bytes
+    m_imageFile.seekg(5, std::ios_base::cur);
+    
+    UInt8 majVersionByte, minVersionByte;
+    m_imageFile >> std::noskipws >> majVersionByte >> minVersionByte;
+    
+    logFile << "JFIF version: " << (int)majVersionByte << "." << (int)(minVersionByte >> 4) << (int)(minVersionByte & 0x0F) << std::endl;
+    
+    std::string majorVersion = std::to_string(majVersionByte);
+    std::string minorVersion = std::to_string((int)(minVersionByte >> 4));
+    minorVersion +=  std::to_string((int)(minVersionByte & 0x0F));
+    
+    UInt8 densityByte;
+    m_imageFile >> std::noskipws >> densityByte;
+    
+    std::string densityUnit = "";
+    switch(densityByte)
+    {
+        case 0x00: densityUnit = "Pixel Aspect Ratio"; break;
+        case 0x01: densityUnit = "Pixels per inch (DPI)"; break;
+        case 0x02: densityUnit = "Pixels per centimeter"; break;
+    }
+    
+    logFile << "Image density unit: " << densityUnit << std::endl;
+    
+    UInt16 xDensity = 0, yDensity = 0;
+    
+    m_imageFile.read(reinterpret_cast<char *>(&xDensity), 2);
+    m_imageFile.read(reinterpret_cast<char *>(&yDensity), 2);
+    
+    xDensity = htons(xDensity);
+    yDensity = htons(yDensity);
+    
+    logFile << "Horizontal image density: " << xDensity << std::endl;
+    logFile << "Vertical image density: " << yDensity << std::endl;
+    
+    // Ignore the image thumbnail data
+    UInt8 xThumb = 0, yThumb = 0;
+    m_imageFile >> std::noskipws >> xThumb >> yThumb;        
+    m_imageFile.seekg(3 * xThumb * yThumb, std::ios_base::cur);
+    
+    logFile << "Finished parsing JPEG/JFIF marker segment (APP-0) [OK]" << std::endl;
+}
+
+void Decoder::parseCOMSegment()
+//This function parses comment, if it is present, in the JFIF file
+{
+    if (!m_imageFile.is_open() || !m_imageFile.good())	// checks if scanning of image file is not possible
+    {
+        logFile << "Unable scan image file: \'" + m_filename + "\'" << std::endl;
+        return;
+    }
+    
+    logFile << "Parsing comment segment..." << std::endl;
+    
+    UInt16 lenByte = 0;
+    UInt8 byte = 0;
+    std::string comment;
+    
+    m_imageFile.read(reinterpret_cast<char *>(&lenByte), 2);
+    lenByte = htons(lenByte);
+    std::size_t curPos = m_imageFile.tellg();
+    
+    logFile << "Comment segment length: " << lenByte << std::endl;
+    
+    for (auto i = 0; i < lenByte - 2; ++i)
+    {
+        m_imageFile >> std::noskipws >> byte;
+        
+        if (byte == JFIF_BYTE_FF)
+        {
+            logFile << "Unexpected start of marker at offest: " << curPos + i << std::endl;
+            logFile << "Comment segment content: " << comment << std::endl;
+            return;
+        }
+        
+        comment.push_back(static_cast<char>(byte));
+    }
+    
+    logFile << "Comment segment content: " << comment << std::endl;
+    logFile << "Finished parsing comment segment [OK]" << std::endl;
+}
+
+void Decoder::parseDQTSegment()
+// This function processes quantization tables present in a DQT segment when found
+{
+    if (!m_imageFile.is_open() || !m_imageFile.good()) // checking if scanning the image file is not possible
+    {
+        logFile << "Unable scan image file: \'" + m_filename + "\'" << std::endl;
+        return;
+    }
+
+    logFile << "Parsing quantization table segment..." << std::endl;
+
+    UInt16 lenByte = 0;
+    UInt8 PqTq;
+    UInt8 Qi;
+
+    m_imageFile.read(reinterpret_cast<char *>(&lenByte), 2);
+    lenByte = htons(lenByte);
+    logFile << "Quantization table segment length: " << (int)lenByte << std::endl;
+
+    lenByte -= 2;
+
+    for (int qt = 0; qt < int(lenByte) / 65; ++qt)
+    {
+        m_imageFile >> std::noskipws >> PqTq;
+
+        int precision = PqTq >> 4; // Precision is always 8-bit for baseline DCT
+        int QTtable = PqTq & 0x0F; // Quantization table number (0-3)
+
+        logFile << "Quantization Table Number: " << QTtable << std::endl;
+        logFile << "Quantization Table #" << QTtable << " precision: " << (precision == 0 ? "8-bit" : "16-bit") << std::endl;
+
+        m_QTables.push_back({});
+
+        // Populate quantization table #QTtable
+        for (auto i = 0; i < 64; ++i)
+        {
+            m_imageFile >> std::noskipws >> Qi;
+            m_QTables[QTtable].push_back((UInt16)Qi);
+        }
+    }
+
+    logFile << "Finished parsing quantization table segment [OK]" << std::endl;
+}
+
+
+//
+///////
+
+
+
+
+
+
 
 void Decoder::decodeScanData()
 {
