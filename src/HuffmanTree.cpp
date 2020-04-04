@@ -13,7 +13,7 @@ namespace kpeg
         if ( node == nullptr )
             return;
         
-        if ( node->lChild != nullptr )
+        if ( node->lChild != nullptr )          //different code length cannot have same huffman code
         {
             // logFile - keeps registry of events , message or communication
             logFile << "Given node already has a left child, skipping insertion" << std::endl;
@@ -56,7 +56,7 @@ namespace kpeg
         
         /* Node is the left child of its parent, then the parent's
          right child is its right level order node.*/
-        if ( node->parent != nullptr && node->parent->lChild == node )
+        if ( node->parent != nullptr && node->parent->lChild == node )          //Checks whether right child node is present
             return node->parent->rChild;
         
         /* Else node is the right child of its parent, then traverse
