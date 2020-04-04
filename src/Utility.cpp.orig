@@ -1,9 +1,0 @@
-<<<<<<< HEAD
-#include "Utility.hpp"
-
-std::ofstream logFile("kpeg.log", std::ios::out);
-=======
-#include "Utility.hpp"
-
-std::ofstream logFile("kpeg.log", std::ios::out);
->>>>>>> bb118b945c10a6e8ca695115298253cd0182b525
